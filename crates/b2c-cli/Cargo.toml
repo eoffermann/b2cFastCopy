@@ -1,0 +1,14 @@
+[package]
+name = "b2c-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "b2fc"
+path = "src/main.rs"
+
+[dependencies]
+b2c-engine = { path = "../b2c-engine" }
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
