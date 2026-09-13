@@ -1,0 +1,25 @@
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Note: Cargo.lock IS committed - this repo produces a binary, not a library.
+
+# b2fc runtime artifacts
+# Device profiles are keyed by hardware serial and are machine-specific.
+*.b2cprofile
+profiles/
+# Resume journals describe one interrupted transfer.
+*.b2cjournal
+# Benchmark output.
+/bench-results/
+
+# Windows cruft
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Editors
+.vs/
+.vscode/
+*.swp
