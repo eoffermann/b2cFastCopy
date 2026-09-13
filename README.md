@@ -26,10 +26,42 @@ case is the one where the destination has headroom.
 | NVMe → USB HDD (E:→F:) | 12 GiB, 12 files | robocopy (plain) — 64.3 s, 191 MB/s | 66.3 s, 185 MB/s | 0.97× |
 | Small files → USB SSD | 4000 × 32 KiB | robocopy `/MT:32` — 3,274 files/s | **3,933 files/s** | **1.20×** |
 
-Read that table carefully before expecting miracles. The USB SSD saturates at ~865 MB/s
-and the USB HDD at ~190 MB/s; every tool hits those walls, and on the HDD plain
-single-threaded robocopy is actually the fastest of the three because the disk cannot use
-concurrency at all. Where the destination is genuinely fast, the pipeline pulls ahead.
+Read that table carefully before expecting miracles. Every tool hits the destination's
+wall, and on the HDD plain single-threaded robocopy is actually the fastest of the three
+because the disk cannot use concurrency at all. Where the destination is genuinely fast,
+the pipeline pulls ahead.
+
+### Burst figures are not sustained figures
+
+The 868/859 MB/s row above is a 12 GiB burst into a *fresh* SLC cache, and on its own it
+is misleading. A 195 GiB real-world copy to that same USB SSD averaged 211 MB/s, and once
+the drive's cache was thoroughly exhausted, one 6.26 GiB file measured in alternating
+runs:
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| b2fc | 114 MB/s | 117 MB/s | 137 MB/s |
+| robocopy `/J` | 135 MB/s | 132 MB/s | — |
+
+Both converge on roughly 130 MB/s — a **6.6× drop from the burst number**, and the drive's
+real sustained rate. Benchmark past the cache before believing a figure, and treat any
+short run against a consumer SSD as an upper bound rather than a throughput.
+
+It is also the clearest available confirmation that `CLIFF` is worth detecting. The
+condition it watches for is not hypothetical; it is what this hardware does after the
+first few gigabytes.
+
+### A copy is a point-in-time snapshot
+
+Verifying that 195 GiB copy turned up three missing files and seven with differing sizes.
+All ten were the source application's own live state — caches, UI state, a conversation
+file whose name was a timestamp from *during* the copy — and several were **larger at the
+destination than at the source**, because the source shrank afterwards. Every model file
+was byte-identical, confirmed by hash on the two largest.
+
+Nothing was wrong, but it is worth knowing: shut the application down first if you want a
+consistent snapshot of its configuration. Bulk data that nobody is writing to is never
+affected.
 
 ### The property that does not show up as MB/s
 
@@ -62,6 +94,9 @@ fall off a cliff once it fills. This is exactly the condition `CLIFF` detection 
 for.
 
 ## Status
+
+A run that does not copy everything says so on the first line of its summary and exits
+non-zero; a shortfall is never reported as success.
 
 Working today: the unbuffered pipeline, the RAM arena with large-page support, the
 adaptive scheduler including cliff detection and same-spindle burst mode, device
@@ -181,6 +216,18 @@ classification falls back to the conservative default.
   unbuffered I/O — every destination open fails with a bare `ERROR_INVALID_PARAMETER`
   naming nothing. Raw `GENERIC_WRITE` is mapped after that validation and is accepted.
   There is a regression test pinning this down.
+- **The `\\?\` prefix disables path normalisation, so paths must be canonicalised
+  first.** The prefix buys long-path support by handing the path almost straight to the
+  object manager — which also means `.`, `..` and forward slashes stop being resolved and
+  become literal name components. A destination of `G:\.` is a perfectly ordinary thing
+  to type, and `\\?\G:\.\file` asks for a directory literally named `.`; every bulk file
+  fails with ERROR_PATH_NOT_FOUND while small files, which go through the platform copy,
+  succeed normally. Roots go through `GetFullPathNameW` before any prefix is applied, and
+  `wide_path` refuses to prefix a path that is not canonical.
+- **The destination is write-probed before any data is read.** One `CreateFileW` against
+  a throwaway file in the destination, through the same call the writers use. Without it,
+  an unopenable destination still reads the whole source at full speed and discards it —
+  195 GiB over fourteen minutes in the report that prompted the check.
 - **Tail handling.** The final chunk is written rounded up to a sector multiple, then
   `SetEndOfFile` trims the file to its true length. Getting this wrong pads files with
   garbage that no error surfaces, which is why the round-trip test asserts exact lengths

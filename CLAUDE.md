@@ -93,6 +93,12 @@ Places where a bug is silent rather than loud:
   destination open fails with a bare `ERROR_INVALID_PARAMETER` (87) that names nothing.
   Use the raw `GENERIC_*` rights (`ACCESS_READ`/`ACCESS_WRITE` in `win/file.rs`). Pinned
   by `append_access_is_rejected_with_unbuffered_io`.
+- **`\\?\` disables path normalisation.** The prefix stops `.`, `..` and `/` from being
+  resolved, so they become literal name components. `b2fc src G:\.` copied *only* the
+  small files, because those use `std::fs::copy` (which normalises) while every bulk
+  destination open failed with ERROR_PATH_NOT_FOUND. Roots go through `win::full_path`
+  (`GetFullPathNameW`) in `absolute()`, and `wide_path` will not prefix a non-canonical
+  path. Any new path that reaches `CreateFileW` must come from a normalised root.
 - **Synchronous handles serialise I/O.** Sharing one handle across workers collapses
   queue depth to one. Each worker opens its own handle per file.
 - **Unbuffered tail writes.** The last chunk is written rounded up to a sector multiple,

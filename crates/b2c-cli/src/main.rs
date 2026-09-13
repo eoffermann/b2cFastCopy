@@ -168,9 +168,20 @@ fn report(o: &b2c_engine::Outcome, args: &Args) {
         );
         return;
     }
+    // Lead with the shortfall. A run that copies 20,217 of 20,299 files is a
+    // failure, and burying that under a cheerful "Copied N files" is how it
+    // gets mistaken for success.
+    let missing = o.files_expected.saturating_sub(o.files);
+    if missing > 0 {
+        println!(
+            "  \u{1b}[1mINCOMPLETE: {} of {} file(s) did not copy.\u{1b}[0m",
+            missing, o.files_expected
+        );
+    }
     println!(
-        "  Copied {} files, {} in {} \u{2014} {}",
+        "  Copied {} of {} files, {} in {} \u{2014} {}",
         o.files,
+        o.files_expected,
         fmt::bytes(o.bytes),
         fmt::duration(o.seconds),
         fmt::rate(o.rate())

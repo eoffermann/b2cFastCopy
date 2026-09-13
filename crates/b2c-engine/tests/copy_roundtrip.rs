@@ -195,6 +195,56 @@ fn verify_pass_accepts_a_good_copy() {
 }
 
 #[test]
+fn copies_to_a_destination_containing_a_dot_component() {
+    // `b2fc src G:\.` is an ordinary thing to type. It used to copy only the
+    // small files: they go through the platform copy, which normalises the
+    // path, while every bulk destination open got the \\?\ prefix applied to a
+    // literal "." component and failed with ERROR_PATH_NOT_FOUND.
+    let src = TempDir::new("dot-src");
+    let dst = TempDir::new("dot-dst");
+    std::fs::write(src.path().join("big.bin"), pattern(200_000)).unwrap();
+    std::fs::write(src.path().join("small.bin"), pattern(100)).unwrap();
+
+    let dotted = dst.path().join(".");
+    let copier = Copier::new(src.path(), &dotted, options()).expect("build copier");
+    let outcome = copier.run().expect("run copy");
+
+    assert!(outcome.errors.is_empty(), "errors: {:?}", outcome.errors);
+    assert_eq!(
+        outcome.files, outcome.files_expected,
+        "every planned file must copy"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("big.bin")).unwrap(),
+        pattern(200_000)
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("small.bin")).unwrap(),
+        pattern(100)
+    );
+}
+
+#[test]
+fn copies_with_forward_slash_separators() {
+    // Same failure mode, different trigger: the prefix also disables the
+    // forward-slash translation that the rest of Win32 performs.
+    let src = TempDir::new("slash-src");
+    let dst = TempDir::new("slash-dst");
+    std::fs::write(src.path().join("big.bin"), pattern(200_000)).unwrap();
+
+    let slashed = PathBuf::from(src.path().to_string_lossy().replace('\\', "/"));
+    let copier = Copier::new(&slashed, dst.path(), options()).expect("build copier");
+    let outcome = copier.run().expect("run copy");
+
+    assert!(outcome.errors.is_empty(), "errors: {:?}", outcome.errors);
+    assert_eq!(outcome.files, outcome.files_expected);
+    assert_eq!(
+        std::fs::read(dst.path().join("big.bin")).unwrap(),
+        pattern(200_000)
+    );
+}
+
+#[test]
 fn buffered_fallback_produces_identical_output() {
     // --no-unbuffered exists for filesystems that refuse FILE_FLAG_NO_BUFFERING.
     // It takes a different code path with alignment padding switched off, so it

@@ -10,6 +10,7 @@ use crate::scanner::{self, FileTask, Plan};
 use crate::scheduler::{Limits, Role, Scheduler};
 use crate::stats::Stats;
 use crate::win::file::File;
+use crate::win::full_path;
 use crate::win::mem::memory_status;
 use crate::win::privileges::{self, Privileges};
 use std::collections::HashMap;
@@ -55,6 +56,9 @@ impl Default for Options {
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
     pub files: u64,
+    /// How many files the plan contained. A shortfall against `files` means
+    /// some did not copy, which must never be reported as success.
+    pub files_expected: u64,
     pub bytes: u64,
     pub seconds: f64,
     pub errors: Vec<String>,
@@ -156,9 +160,7 @@ impl Copier {
 
         let same_spindle = device::shares_spindle(&src_dev, &dst_dev);
         if same_spindle {
-            progress::note(
-                "source and destination share a spindle; using alternating bursts",
-            );
+            progress::note("source and destination share a spindle; using alternating bursts");
         }
 
         // One block size must satisfy both volumes' alignment, and should suit
@@ -265,6 +267,7 @@ impl Copier {
         if self.opts.dry_run {
             progress::note("dry run: no data will be moved");
             outcome.files = plan.file_count() as u64;
+            outcome.files_expected = plan.file_count() as u64;
             outcome.bytes = plan.total_bytes;
             outcome.seconds = started.elapsed().as_secs_f64();
             return Ok(outcome);
@@ -276,6 +279,10 @@ impl Copier {
                 return Err(Error::config(format!("cannot create {}: {e}", d.display())));
             }
         }
+
+        // Prove the destination is writable through the very same call the
+        // pipeline uses, before spending minutes reading data that cannot land.
+        self.preflight_destination(&plan)?;
 
         if !plan.bulk.is_empty() {
             let (bytes, errs, arena_bytes, large) = self.run_bulk(&plan)?;
@@ -292,6 +299,7 @@ impl Copier {
         }
 
         outcome.files = self.stats.files_done.load(Relaxed);
+        outcome.files_expected = plan.file_count() as u64;
         outcome.seconds = started.elapsed().as_secs_f64();
 
         if self.opts.verify {
@@ -299,6 +307,44 @@ impl Copier {
         }
 
         Ok(outcome)
+    }
+
+    /// Open, then delete, one probe file in the destination using the same
+    /// call the writers use.
+    ///
+    /// Without this, a destination that cannot be opened at all still reads the
+    /// entire source at full speed and discards it — 195 GiB over fourteen
+    /// minutes, in the report that prompted this check — before the error
+    /// count makes the problem visible. One failed open here costs a
+    /// millisecond and says exactly what is wrong.
+    fn preflight_destination(&self, plan: &Plan) -> Result<()> {
+        let dir = plan
+            .dirs
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.dst.clone());
+        let probe = dir.join(format!("b2fc-write-probe-{}.tmp", std::process::id()));
+
+        let opened = if self.opts.unbuffered {
+            File::create_write_unbuffered(&probe)
+        } else {
+            File::create_write_buffered(&probe)
+        };
+
+        match opened {
+            Ok(handle) => {
+                drop(handle);
+                let _ = std::fs::remove_file(&probe);
+                Ok(())
+            }
+            Err(e) => Err(Error::config(format!(
+                "destination is not writable through the copy path: {e}\n  \
+                 probed: {}\n  \
+                 the directory exists, so this is usually the path form rather \
+                 than permissions",
+                probe.display()
+            ))),
+        }
     }
 
     // ---- bulk pipeline ---------------------------------------------------
@@ -743,13 +789,14 @@ fn hash_file(p: &Path) -> std::io::Result<blake3::Hash> {
     Ok(hasher.finalize())
 }
 
+/// Make a path absolute *and* canonical.
+///
+/// Canonical matters as much as absolute: every path derived from these roots
+/// is later handed to `wide_path`, which can only apply the extended-length
+/// prefix to a path with no `.`, `..` or forward slashes in it. Normalising
+/// once here is what lets every subsequent open take the prefixed fast path.
 fn absolute(p: &Path) -> Result<PathBuf> {
-    if p.is_absolute() {
-        return Ok(p.to_path_buf());
-    }
-    std::env::current_dir()
-        .map(|d| d.join(p))
-        .map_err(|e| Error::config(format!("cannot resolve {}: {e}", p.display())))
+    full_path(p).map_err(|e| Error::config(format!("cannot resolve {}: {e}", p.display())))
 }
 
 fn yes(b: bool) -> &'static str {

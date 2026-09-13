@@ -171,12 +171,17 @@ fn run(stats: Arc<Stats>, sched: Arc<Scheduler>, title: String, stop: Arc<Atomic
                 t.readers, t.writers, snap.read_stalls, snap.write_stalls
             ),
             format!(
-                "  files  {} / {}    {}  of  {}    ETA {}",
+                "  files  {} / {}    {}  of  {}    ETA {}{}",
                 snap.files_done,
                 snap.files_total,
                 fmt::bytes(done),
                 fmt::bytes(snap.bytes_total),
-                fmt::duration(eta)
+                fmt::duration(eta),
+                if snap.errors > 0 {
+                    format!("    \u{1b}[1m{} ERRORS\u{1b}[0m", snap.errors)
+                } else {
+                    String::new()
+                }
             ),
             format!("  {}  {:>5.1}%", bar(frac, 48), frac * 100.0),
             format!("  {}", truncate(&phase_line(), 68)),
