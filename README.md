@@ -1,5 +1,7 @@
 # b2cFastCopy
 
+> **Project page:** [b2cFastCopy](https://bigblueceiling.com/projects/b2c-fastcopy/) on [Big Blue Ceiling](https://bigblueceiling.com/)
+
 A bulk file copier for Windows that keeps every device in the transfer pinned at its
 real sustained ceiling, using RAM as an elastic shock absorber between a fast side and
 a slow side.
